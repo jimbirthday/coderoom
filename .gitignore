@@ -1,0 +1,6 @@
+/target
+**/*.db
+.env
+/.coderoom
+/.DS_Store
+.cargo

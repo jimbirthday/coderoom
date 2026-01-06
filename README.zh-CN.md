@@ -81,7 +81,7 @@ coderoom serve
 
 ![index](/static/index.png "index")
 
-![index](/static/inde1x.png "index")
+![index](/static/index1.png "index")
 
 ## CLI 使用方式
 

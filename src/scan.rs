@@ -6,14 +6,11 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-fn is_ignorable_dir_name(name: &str) -> bool {
-    matches!(
-        name,
-        ".git" | "target" | "node_modules" | ".venv" | ".idea" | ".tox"
-    )
-}
-
-pub fn discover_git_repos(root: &Path, max_depth: Option<usize>) -> Result<Vec<PathBuf>> {
+pub fn discover_git_repos(
+    root: &Path,
+    max_depth: Option<usize>,
+    ignore_dir_names: &HashSet<String>,
+) -> Result<Vec<PathBuf>> {
     let mut repos = HashSet::<PathBuf>::new();
 
     let mut walker = WalkDir::new(root).follow_links(false);
@@ -40,7 +37,7 @@ pub fn discover_git_repos(root: &Path, max_depth: Option<usize>) -> Result<Vec<P
             continue;
         }
 
-        if is_ignorable_dir_name(&name) {
+        if ignore_dir_names.contains(name.as_ref()) {
             it.skip_current_dir();
             continue;
         }

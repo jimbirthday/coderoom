@@ -91,6 +91,23 @@ enum Command {
         #[arg(long)]
         commits_per_branch: Option<usize>,
     },
+    /// 管理扫描时需要忽略的目录名（写入 ~/.coderoom/config.toml）
+    Ignores {
+        #[command(subcommand)]
+        command: IgnoresCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum IgnoresCommand {
+    /// 列出忽略目录名
+    List,
+    /// 添加一个忽略目录名（例如：.cargo_home）
+    Add { name: String },
+    /// 移除一个忽略目录名
+    Remove { name: String },
+    /// 重置为默认忽略目录名列表
+    Reset,
 }
 
 #[derive(Subcommand, Debug)]
@@ -150,11 +167,13 @@ async fn main() -> Result<()> {
             let mut cfg = config::Config::load_or_create(&cfg_path)?;
             let db = db::Db::open(&db_path)?;
             db.init_schema()?;
+            let ignore_dir_names: std::collections::HashSet<String> =
+                cfg.ignore_dir_names.iter().cloned().collect();
 
             let root_input = root;
             let root_buf = std::path::PathBuf::from(&root_input);
             let root_path = std::fs::canonicalize(&root_buf).unwrap_or(root_buf);
-            let repos = scan::discover_git_repos(&root_path, max_depth)
+            let repos = scan::discover_git_repos(&root_path, max_depth, &ignore_dir_names)
                 .with_context(|| format!("scan root {}", root_path.display()))?;
             let mut keep = std::collections::HashSet::<String>::new();
             for repo_root in repos {
@@ -179,12 +198,14 @@ async fn main() -> Result<()> {
             }
             let db = db::Db::open(&db_path)?;
             db.init_schema()?;
+            let ignore_dir_names: std::collections::HashSet<String> =
+                cfg.ignore_dir_names.iter().cloned().collect();
             let mut indexed = 0usize;
             let mut pruned = 0usize;
             for root in cfg.roots {
                 let root_path = std::fs::canonicalize(std::path::PathBuf::from(&root))
                     .unwrap_or_else(|_| std::path::PathBuf::from(&root));
-                let repos = scan::discover_git_repos(&root_path, max_depth)
+                let repos = scan::discover_git_repos(&root_path, max_depth, &ignore_dir_names)
                     .with_context(|| format!("scan root {}", root_path.display()))?;
                 let mut keep = std::collections::HashSet::<String>::new();
                 for repo_root in repos {
@@ -332,6 +353,33 @@ async fn main() -> Result<()> {
                 "Commit index rebuilt for {} repos (branches={}, commits_per_branch={}).",
                 repos_indexed, cfg.commit_index_branches, cfg.commit_index_commits_per_branch
             );
+        }
+        Command::Ignores { command } => {
+            let mut cfg = config::Config::load_or_create(&cfg_path)?;
+            match command {
+                IgnoresCommand::List => {
+                    for n in cfg.ignore_dir_names {
+                        println!("{n}");
+                    }
+                }
+                IgnoresCommand::Add { name } => {
+                    if cfg.add_ignore_dir_name(&name) {
+                        cfg.save(&cfg_path)?;
+                    }
+                    println!("OK");
+                }
+                IgnoresCommand::Remove { name } => {
+                    if cfg.remove_ignore_dir_name(&name) {
+                        cfg.save(&cfg_path)?;
+                    }
+                    println!("OK");
+                }
+                IgnoresCommand::Reset => {
+                    cfg.reset_ignore_dir_names();
+                    cfg.save(&cfg_path)?;
+                    println!("OK");
+                }
+            }
         }
     }
 

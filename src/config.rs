@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub roots: Vec<String>,
+    #[serde(default = "default_ignore_dir_names")]
+    pub ignore_dir_names: Vec<String>,
     #[serde(default = "default_commit_index_branches")]
     pub commit_index_branches: usize,
     #[serde(default = "default_commit_index_commits_per_branch")]
@@ -43,6 +45,30 @@ impl Config {
         self.roots.retain(|r| r != &root);
         before != self.roots.len()
     }
+
+    pub fn add_ignore_dir_name(&mut self, name: &str) -> bool {
+        let name = name.trim();
+        if name.is_empty() {
+            return false;
+        }
+        if self.ignore_dir_names.iter().any(|s| s == name) {
+            return false;
+        }
+        self.ignore_dir_names.push(name.to_string());
+        self.ignore_dir_names.sort();
+        true
+    }
+
+    pub fn remove_ignore_dir_name(&mut self, name: &str) -> bool {
+        let name = name.trim();
+        let before = self.ignore_dir_names.len();
+        self.ignore_dir_names.retain(|s| s != name);
+        before != self.ignore_dir_names.len()
+    }
+
+    pub fn reset_ignore_dir_names(&mut self) {
+        self.ignore_dir_names = default_ignore_dir_names();
+    }
 }
 
 pub fn data_dir() -> Result<PathBuf> {
@@ -76,4 +102,26 @@ fn default_commit_index_branches() -> usize {
 
 fn default_commit_index_commits_per_branch() -> usize {
     50
+}
+
+fn default_ignore_dir_names() -> Vec<String> {
+    vec![
+        ".cargo".into(),
+        ".cargo_home".into(),
+        ".cache".into(),
+        ".gradle".into(),
+        ".idea".into(),
+        ".m2".into(),
+        ".npm".into(),
+        ".pnpm-store".into(),
+        ".terraform".into(),
+        ".tox".into(),
+        ".venv".into(),
+        ".vscode".into(),
+        ".yarn".into(),
+        "build".into(),
+        "dist".into(),
+        "node_modules".into(),
+        "target".into(),
+    ]
 }

@@ -29,6 +29,9 @@ pub async fn serve(state: AppState, host: String, port: u16) -> Result<()> {
         .route("/api/roots/pick", post(api_roots_pick))
         .route("/api/roots/add", post(api_roots_add))
         .route("/api/roots/remove", post(api_roots_remove))
+        .route("/api/ignores/add", post(api_ignores_add))
+        .route("/api/ignores/remove", post(api_ignores_remove))
+        .route("/api/ignores/reset", post(api_ignores_reset))
         .route("/api/scan", post(api_scan))
         .route("/api/prune", post(api_prune))
         .route("/api/repos", get(api_repos))
@@ -121,6 +124,38 @@ async fn api_roots_remove(
 }
 
 #[derive(Deserialize)]
+struct IgnoreBody {
+    name: String,
+}
+
+async fn api_ignores_add(
+    State(state): State<AppState>,
+    Json(body): Json<IgnoreBody>,
+) -> Result<StatusCode, ApiError> {
+    let mut cfg = config::Config::load_or_create(&state.cfg_path).map_err(ApiError::from)?;
+    cfg.add_ignore_dir_name(&body.name);
+    cfg.save(&state.cfg_path).map_err(ApiError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn api_ignores_remove(
+    State(state): State<AppState>,
+    Json(body): Json<IgnoreBody>,
+) -> Result<StatusCode, ApiError> {
+    let mut cfg = config::Config::load_or_create(&state.cfg_path).map_err(ApiError::from)?;
+    cfg.remove_ignore_dir_name(&body.name);
+    cfg.save(&state.cfg_path).map_err(ApiError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn api_ignores_reset(State(state): State<AppState>) -> Result<StatusCode, ApiError> {
+    let mut cfg = config::Config::load_or_create(&state.cfg_path).map_err(ApiError::from)?;
+    cfg.reset_ignore_dir_names();
+    cfg.save(&state.cfg_path).map_err(ApiError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
 struct ScanBody {
     root: Option<String>,
     all: Option<bool>,
@@ -145,28 +180,29 @@ async fn api_scan(
     let max_depth = body.max_depth;
     let prune = body.prune.unwrap_or(false);
 
-    let out = tokio::task::spawn_blocking(move || -> Result<ScanResponse> {
-        let mut cfg = config::Config::load_or_create(&cfg_path)?;
-        let db = db::Db::open(&db_path)?;
-        db.init_schema()?;
+	    let out = tokio::task::spawn_blocking(move || -> Result<ScanResponse> {
+	        let mut cfg = config::Config::load_or_create(&cfg_path)?;
+	        let db = db::Db::open(&db_path)?;
+	        db.init_schema()?;
+	        let ignore_dir_names: HashSet<String> = cfg.ignore_dir_names.iter().cloned().collect();
 
-        let mut indexed = 0usize;
-        let mut pruned = 0usize;
+	        let mut indexed = 0usize;
+	        let mut pruned = 0usize;
 
-        if all || root.is_none() {
-            for r in cfg.roots.clone() {
-                let root_path = PathBuf::from(&r);
-                let (i, p) = scan_one_root(&db, &root_path, max_depth, prune)?;
-                indexed += i;
-                pruned += p;
-            }
-        } else if let Some(root) = root {
-            let root_path = PathBuf::from(&root);
-            let (i, p) = scan_one_root(&db, &root_path, max_depth, prune)?;
-            indexed += i;
-            pruned += p;
-            cfg.add_root(&root_path);
-        }
+	        if all || root.is_none() {
+	            for r in cfg.roots.clone() {
+	                let root_path = PathBuf::from(&r);
+	                let (i, p) = scan_one_root(&db, &root_path, max_depth, prune, &ignore_dir_names)?;
+	                indexed += i;
+	                pruned += p;
+	            }
+	        } else if let Some(root) = root {
+	            let root_path = PathBuf::from(&root);
+	            let (i, p) = scan_one_root(&db, &root_path, max_depth, prune, &ignore_dir_names)?;
+	            indexed += i;
+	            pruned += p;
+	            cfg.add_root(&root_path);
+	        }
 
         cfg.save(&cfg_path)?;
         Ok(ScanResponse { indexed, pruned })
@@ -384,6 +420,7 @@ async fn api_tags(State(state): State<AppState>) -> Result<Json<Vec<TagCountDto>
 struct ConfigDto {
     commit_index_branches: usize,
     commit_index_commits_per_branch: usize,
+    ignore_dir_names: Vec<String>,
 }
 
 async fn api_config(State(state): State<AppState>) -> Result<Json<ConfigDto>, ApiError> {
@@ -391,6 +428,7 @@ async fn api_config(State(state): State<AppState>) -> Result<Json<ConfigDto>, Ap
     Ok(Json(ConfigDto {
         commit_index_branches: cfg.commit_index_branches,
         commit_index_commits_per_branch: cfg.commit_index_commits_per_branch,
+        ignore_dir_names: cfg.ignore_dir_names,
     }))
 }
 
@@ -840,9 +878,10 @@ fn scan_one_root(
     root: &Path,
     max_depth: Option<usize>,
     prune: bool,
+    ignore_dir_names: &HashSet<String>,
 ) -> Result<(usize, usize)> {
     let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    let repos = scan::discover_git_repos(&root, max_depth)
+    let repos = scan::discover_git_repos(&root, max_depth, ignore_dir_names)
         .with_context(|| format!("scan root {}", root.display()))?;
     let mut keep = HashSet::<String>::new();
     for repo_root in repos {
@@ -1068,6 +1107,14 @@ const INDEX_HTML: &str = r##"<!doctype html>
             <button id="rebuildIndex" class="ghost" data-i18n="rebuildIndex">重建索引</button>
             <div id="idxStatus" class="meta"></div>
           </div>
+
+          <div class="hint" style="margin-top:12px;" data-i18n="ignoreHint">扫描时忽略常见依赖/缓存目录（目录名匹配）。</div>
+          <div class="row">
+            <input id="ignoreName" placeholder=".cargo_home" />
+            <button id="ignoreAdd" class="ghost" data-i18n="addBtn">添加</button>
+            <button id="ignoreReset" class="ghost" data-i18n="resetBtn">重置</button>
+          </div>
+          <ul id="ignores" class="list"></ul>
         </div>
       </aside>
 
@@ -1928,6 +1975,8 @@ const I18N = {
     indexBranches: "分支数",
     indexCommits: "每分支提交数",
     rebuildIndex: "重建索引",
+    resetBtn: "重置",
+    ignoreHint: "扫描时忽略常见依赖/缓存目录（目录名匹配）。",
     perPage: "每页",
     prev: "上一页",
     next: "下一页",
@@ -2013,6 +2062,8 @@ const I18N = {
     indexBranches: "Branches",
     indexCommits: "Commits/branch",
     rebuildIndex: "Rebuild index",
+    resetBtn: "Reset",
+    ignoreHint: "Ignore dependency/cache folders during scan (by directory name).",
     perPage: "Per page",
     prev: "Prev",
     next: "Next",
@@ -2101,6 +2152,29 @@ async function loadCommitIndexConfig() {
   const cfg = await api("/api/config");
   $("idxBranches").value = cfg.commit_index_branches;
   $("idxCommits").value = cfg.commit_index_commits_per_branch;
+  renderIgnores(cfg.ignore_dir_names || []);
+}
+
+function renderIgnores(items) {
+  const ul = $("ignores");
+  if (!ul) return;
+  ul.innerHTML = "";
+  const list = Array.from(new Set((items || []).map((s) => String(s)))).filter((s) => s.trim().length > 0);
+  list.sort();
+  for (const n of list) {
+    const li = document.createElement("li");
+    li.innerHTML = `
+      <div class="mono" title="${escapeHtml(n)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(n)}</div>
+      <div class="actions-cell">
+        <button class="ghost small danger" data-name="${encodeURIComponent(n)}">${t("remove")}</button>
+      </div>
+    `;
+    li.querySelector("button").onclick = async () => {
+      await api("/api/ignores/remove", { method: "POST", body: JSON.stringify({ name: n }) });
+      await loadCommitIndexConfig();
+    };
+    ul.appendChild(li);
+  }
 }
 
 async function rebuildCommitIndexAll() {
@@ -2684,6 +2758,19 @@ $("btnPickRoot").onclick = async () => {
   } finally {
     setBusy(false);
   }
+};
+
+$("ignoreAdd").onclick = async () => {
+  const name = $("ignoreName").value.trim();
+  if (!name) return;
+  await api("/api/ignores/add", { method: "POST", body: JSON.stringify({ name }) });
+  $("ignoreName").value = "";
+  await loadCommitIndexConfig();
+};
+
+$("ignoreReset").onclick = async () => {
+  await api("/api/ignores/reset", { method: "POST", body: "{}" });
+  await loadCommitIndexConfig();
 };
 
 $("btnClearTag").onclick = async () => {

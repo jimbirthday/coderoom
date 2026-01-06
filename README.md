@@ -1,53 +1,92 @@
 # CodeRoom
 
-本项目是一个本地仓库管理器：扫描目录里的 Git 仓库，建立本地索引（SQLite），提供搜索、标签、最近访问等能力；完全离线。
+[中文 README](README.zh-CN.md)
 
-## 快速开始
+CodeRoom is an **offline local Git repository manager**. It scans directories for Git repos, builds a local **SQLite index**, and provides fast search, tagging, recent access tracking, and commit browsing/search via an embedded web UI.
 
-```bash
-cargo run -- init
-cargo run -- scan --root ~/dev
-cargo run -- list
-cargo run -- search "agent"
-cargo run -- tag add --repo ~/dev/my-repo backend
-cargo run -- list --tag backend
-cargo run -- serve
-```
-
-默认数据目录：`~/.coderoom/`（包含 `config.toml` 与 `coderoom.db`）。
-
-## 常用命令
+## Install
 
 ```bash
-# Roots 管理
-cargo run -- roots list
-cargo run -- roots add ~/dev
-cargo run -- roots remove ~/dev
+# Build locally
+cargo build --release
+./target/release/coderoom --help
 
-# 扫描/清理
-cargo run -- scan-all --prune
-cargo run -- prune
-
-# Web 管理页
-cargo run -- serve --host 127.0.0.1 --port 8787
+# Or install to ~/.cargo/bin
+cargo install --path .
+coderoom --help
 ```
 
-Web 页面能力：
-- 中英双语切换（右上角按钮，自动记忆）
-- Roots 管理 + 扫描/清理
-- 仓库搜索、标签筛选、标签增删、最近访问记录
-- 一键复制仓库路径
-- 分支（本地/远程）选择 + 提交记录（分页）
-- 提交内容搜索（依赖本地提交索引，可在页面里重建索引）
+Data directory: `~/.coderoom/` (contains `config.toml` and `coderoom.db`).
 
-目录选择说明：
-- Web 页面无法直接访问本机文件系统；因此我们通过后端调用系统原生对话框。
-- 当前仅 macOS 支持“选择…”按钮（基于 `osascript choose folder`），其他平台会提示你手动粘贴路径。
+## Quick Start
 
-提交索引默认策略：
-- 默认索引：最近有提交的 `10` 个分支 × 每分支 `50` 个提交（可在页面“提交搜索”里修改并重建）。
-- CLI 也可重建：`cargo run -- commit-index --all --branches 10 --commits-per-branch 50`
+```bash
+coderoom init
+coderoom scan --root ~/dev --prune
+coderoom serve
+```
 
-Web 使用提示：
-- 搜索支持勾选范围：`仓库/提交`，以及仓库字段（名/路/README/标）。
-- 搜索命中会在列表里显示 `name/path/readme/tag` 等标识，帮助判断命中来源。
+Open the URL printed in the terminal (default: `http://127.0.0.1:8787/`).
+
+## Common CLI Commands
+
+```bash
+# Roots (persisted in ~/.coderoom/config.toml)
+coderoom roots list
+coderoom roots add ~/dev
+coderoom roots remove ~/dev
+
+# Scan / cleanup
+coderoom scan --root ~/dev --prune
+coderoom scan-all --prune
+coderoom prune
+
+# List / search
+coderoom list --recent
+coderoom list --tag backend
+coderoom search "agent"
+
+# Tags
+coderoom tag add --repo ~/dev/my-repo backend
+coderoom tag remove --repo ~/dev/my-repo backend
+coderoom tag list
+coderoom tag list --repo ~/dev/my-repo
+
+# Commit index (required for commit-content search)
+coderoom commit-index --all --branches 10 --commits-per-branch 50
+
+# Scan ignore list (directory names)
+coderoom ignores list
+coderoom ignores add .cargo_home
+coderoom ignores remove .cargo_home
+coderoom ignores reset
+```
+
+## Web UI (Embedded)
+
+Key features:
+
+- Language toggle (中文/English) with remembered preference
+- Roots management + scan/prune operations
+- Repo list with pagination and “recent first”
+- Repo overview: name, README excerpt, path, and `origin` remote (click to copy)
+- Tags: sidebar shows only tags that still have repos (with counts); inline add/remove + bulk tag
+- Commits: browse commits per branch (local + remote), paginated; click for details
+- Search:
+  - Repo search scopes: name/path/README/tags
+  - Commit search scopes: summary/message + optional branch filter
+  - Shows “matched in” badges and highlights the query
+
+![index](/static/index.png "index")
+
+## Folder Picker (Cross-platform, Best-effort)
+
+Browsers cannot provide absolute local paths, so the folder picker is implemented server-side:
+
+- macOS: `osascript` (built-in)
+- Windows: `powershell`/`pwsh` (WinForms folder dialog)
+- Linux: tries `zenity` / `kdialog` / `yad` (if unavailable, paste the path manually)
+
+## Scan Ignore Rules
+
+CodeRoom ignores folders by **directory name match** (configurable in the Web Settings panel or via `coderoom ignores …`). This prevents indexing dependency caches (e.g. `.cargo_home/git/checkouts`).
